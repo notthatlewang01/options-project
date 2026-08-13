@@ -3,8 +3,8 @@
 Black-76 pricing, implied-volatility inversion, and the static no-arbitrage
 conditions a chain must satisfy before a density can be read off it.
 
-**Status: `bs` and `arbitrage` complete.** 130 tests, 100% statement coverage.
-Smile fitting, Breeden–Litzenberger and BKM land in Stage 6.
+**Status: complete.** 344 tests, 100% statement coverage — `bs`, `arbitrage`,
+`smile`, `density`, `moments`, `surface`.
 
 ## `bs` — Black-76
 
@@ -143,10 +143,111 @@ excluded.
 from spxrnd.analytics import bs, arbitrage
 
 sigma, ok = bs.implied_vol(
-    chain.quotes["mid"], chain.quotes["forward"], chain.quotes["strike"],
-    chain.quotes["tenor_years"], discount=chain.quotes["discount"], right="call",
+    chain.quotes["mid"],
+    chain.quotes["forward"],
+    chain.quotes["strike"],
+    chain.quotes["tenor_years"],
+    discount=chain.quotes["discount"],
+    right="call",
 )
 report = arbitrage.check_chain(chain.quotes.assign(total_variance=sigma**2 * t))
 print(report.summary())
-assert report.clean          # no executable breaches
+assert report.clean  # no executable breaches
 ```
+
+
+---
+
+## `smile` — SVI, constrained
+
+Raw SVI in total variance, `w(k) = a + b(ρ(k−m) + √((k−m)² + σ²))`. A hyperbola
+with two linear asymptotes, which is the right shape because Lee's moment
+formula requires total variance to grow at most linearly in `|k|`.
+
+The fit is penalised on the **Durrleman function**
+`g(k) = (1 − kw'/2w)² − (w'/4)²(1/w + ¼) + w''/2`, which satisfies `q(K) ≥ 0 ⟺
+g(k) ≥ 0`. So the arbitrage constraint is not bolted on afterwards — it is the
+density's non-negativity written in the smile's own variables.
+
+### Lee's bound is enforced, and here is why
+
+`b(1+|ρ|) ≤ 2`. Left unconstrained on the 2027-04-16 expiry the solver found
+**`b = 76.6`, `ρ = +0.996`** — a wing slope of 153, and a *positive* skew on an
+equity index. It matched the quoted strikes to **0.002 vol points** and was
+nonsense everywhere else: the density spread across strikes from 2.7 to
+2.4×10⁷, went negative, and returned **`E[S_T] = −1.4×10⁻⁶` against a forward of
+7923**.
+
+Six expiries did this. The lesson generalises: in-sample residual says nothing
+about extrapolation, and the wings are where a density integral spends its time.
+
+## `density` — Breeden–Litzenberger
+
+Closed form, `q(K) = g(k) / (K√(2πw)) · e^{−d₂²/2}`, rather than differencing a
+numerically-priced call twice. The finite-difference route is kept as an
+independent check on the algebra; the two agree to 10⁻⁵ across the core.
+
+**The grid is adaptive, and that was a bug worth having.** SVI's wings make the
+density decay like `e^{−|k|/2b}` — a rate set by the *wing slope*, not by ATM
+volatility. On the 2026-09-18 expiry the ATM total vol is 0.0422, so a
+"generous" eight standard deviations spanned ±0.34 in log-moneyness — **narrower
+than the quoted strikes**, which reach −0.885. That truncated 0.28% of the mass
+and pulled `E[S_T]` 0.18% below the forward. Expansion now stops when the edge
+density falls below 10⁻¹³ of its peak.
+
+## `moments` — BKM, the independent route
+
+Carr–Madan spanning integrals of option prices: no density, no Durrleman
+function, no density grid. `E[X]` comes from the log contract itself rather than
+BKM's series approximation for `μ`, which is stated for small returns and put
+the skewness 34% and kurtosis 64% off on a 38-day equity smile.
+
+### The cross-check, on real data
+
+| Expiry | quotes | variance | skewness | kurtosis |
+|---|---|---|---|---|
+| 10-day | 377 | 2.1×10⁻⁹ | 4.5×10⁻⁸ | −2.0×10⁻⁷ |
+| 38-day | 386 | 1.0×10⁻⁸ | 5.5×10⁻⁸ | −1.4×10⁻⁷ |
+| 1-year | 199 | −5.4×10⁻⁵ | 3.6×10⁻⁴ | −1.6×10⁻³ |
+| 5.4-year | 18 | −2.0×10⁻³ | 7.8×10⁻³ | −2.2×10⁻² |
+
+Seven to eight significant figures where quotes are dense, degrading exactly
+where they thin out — and the degradation is itself the quality signal.
+
+**Both routes must integrate over the same range.** Truncating BKM's while the
+density kept its own left the variance 7% low and the kurtosis 64% off. Two
+estimates over different ranges are not a cross-check of anything.
+
+## `surface` — every expiry, with a verdict
+
+```python
+estimate_all(quotes) -> [ExpiryEstimate]
+to_frame(estimates) -> DataFrame
+summary(estimates) -> str
+```
+
+Six checks per expiry: fit RMSE, Durrleman minimum, density mass, **`E[S_T]` vs
+the parity forward**, minimum density relative to peak, and BL-vs-BKM agreement.
+Nothing is silently dropped; what varies is the verdict.
+
+The `E[S_T]` check was computed and displayed for a while before being *gated*
+on, which let six broken expiries through reporting `E[S_T]` near zero. It is
+the strongest single check available — the density and the parity forward are
+entirely independent computations.
+
+### Aug 11 close, all expiries
+
+| | |
+|---|---|
+| (expiry, root) pairs | 58 |
+| **Trustworthy** | **38** |
+| Not estimable | 1 |
+| Fit RMSE | max 0.0039 vol pts |
+| Density mass | worst \|1−m\| = 1.3×10⁻⁵ |
+| **`E[S_T]` vs forward** | **worst 4.8×10⁻⁷** |
+| Annualised vol | 11.65% (6d) → 29.03% (5.4y) |
+| Skew | −1.15 → −4.83 → −2.25 |
+
+The 20 flagged expiries are all long-dated, and they are flagged for marginal
+Durrleman negativity (~10⁻⁶) or BL/BKM disagreement above 1% — both symptoms of
+thin data past a year, both reported rather than hidden.
