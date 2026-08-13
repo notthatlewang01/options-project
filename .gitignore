@@ -20,3 +20,4 @@ htmlcov/
 
 # Claude Code local settings (also covered by the user global ignore)
 .claude/settings.local.json
+logs/

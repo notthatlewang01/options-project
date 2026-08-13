@@ -45,6 +45,15 @@ markers = [
     "live: hits the real CBOE endpoint; excluded from the default suite",
 ]
 
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    # The module-level script guard. Unreachable under pytest by construction,
+    # and covering it would mean re-executing the module as __main__ purely to
+    # satisfy a counter. `tests/cli` runs the real thing via subprocess.
+    'if __name__ == "__main__":',
+]
+
 [tool.ruff]
 line-length = 88
 src = ["src", "tests"]
