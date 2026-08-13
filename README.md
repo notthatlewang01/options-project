@@ -20,7 +20,7 @@ Under construction, built in gated stages. See
 | 1 | Fixture corpus, seed regression tests | done |
 | 2 | `ingest` — fetch, validate, gate, write | done |
 | 3 | `store` — archive, Parquet, DuckDB catalog | done |
-| 4 | `curate` — quality filters, forward curve | — |
+| 4 | `curate` — quality filters, forward curve | done |
 | 5 | `analytics` — Black-76, IV, arbitrage checks | — |
 | 6 | RND — smile fit, Breeden–Litzenberger, BKM | — |
 | 7 | CLI, launchd scheduling, docs | — |
