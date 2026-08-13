@@ -40,6 +40,15 @@ fmt: ## Auto-format
 	$(RUFF) check --fix src tests
 	$(RUFF) format src tests
 
+.PHONY: verify-archive
+verify-archive: ## Check every raw capture against the checksum manifest
+	@cd data/raw && shasum -a 256 -c ../../manifests/raw_archive.sha256 \
+		| grep -v ': OK$$' || echo "all captures verified"
+
+.PHONY: fixtures
+fixtures: ## Regenerate the test fixture corpus from data/raw
+	$(PY) tools/build_fixtures.py
+
 .PHONY: collect
 collect: ## Take exactly one snapshot into data/raw
 	$(PY) -m spxrnd.cli.main collect --dir data

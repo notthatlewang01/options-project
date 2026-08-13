@@ -1,0 +1,29 @@
+{
+ "data": {
+  "ask": 7785.52,
+  "ask_size": 1,
+  "bid": 7712.0498,
+  "bid_size": 1,
+  "close": 7753.1099,
+  "current_price": 7753.1099,
+  "exchange_id": 5,
+  "high": 7773.7598,
+  "iv30": 12.39,
+  "iv30_change": 0.0,
+  "iv30_change_percent": 0.0,
+  "last_trade_time": "2026-08-10T16:14:59",
+  "low": 7743.1099,
+  "open": 7751.7402,
+  "options": [],
+  "prev_day_close": 7757.6401,
+  "price_change": -4.5301,
+  "price_change_percent": -0.0584,
+  "security_type": "index",
+  "seqno": 8260038979,
+  "symbol": "^SPX",
+  "tick": "down",
+  "volume": 0
+ },
+ "symbol": "_SPX",
+ "timestamp": "2026-08-11 00:06:49"
+}
