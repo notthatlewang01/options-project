@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spxrnd"
+version = "0.1.0"
+description = "SPX option-chain collection and risk-neutral density estimation"
+requires-python = ">=3.11"
+
+# Deliberately empty. The `ingest` component is stdlib-only so the collector can
+# be deployed anywhere and cannot break from a dependency upgrade. This is
+# enforced by tests/test_ingest_is_stdlib_only.py, not by convention.
+dependencies = []
+
+[project.optional-dependencies]
+analysis = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pandas>=2.1",
+    "pyarrow>=14",
+    "duckdb>=0.10",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+spxrnd = "spxrnd.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "live: hits the real CBOE endpoint; excluded from the default suite",
+]
+
+[tool.ruff]
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

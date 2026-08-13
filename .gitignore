@@ -1,0 +1,19 @@
+# Collected data. 500 MB+ and growing; the raw archive is the source of truth
+# but it does not belong in git. Test fixtures under tests/fixtures/ ARE tracked.
+data/
+
+# Environments
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
