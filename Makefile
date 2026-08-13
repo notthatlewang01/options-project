@@ -42,8 +42,22 @@ fmt: ## Auto-format
 
 .PHONY: verify-archive
 verify-archive: ## Check every raw capture against the checksum manifest
-	@cd data/raw && shasum -a 256 -c ../../manifests/raw_archive.sha256 \
-		| grep -v ': OK$$' || echo "all captures verified"
+	@$(PY) -c "from pathlib import Path; from spxrnd.store import archive; \
+r = archive.verify(Path('data/raw'), Path('manifests/raw_archive.sha256')); \
+print(f'ok {len(r.ok)}  corrupted {len(r.corrupted)}  missing {len(r.missing)}  unlisted {len(r.unlisted)}'); \
+[print('  CORRUPT', n) for n in r.corrupted]; [print('  MISSING', n) for n in r.missing]; \
+raise SystemExit(0 if r.healthy else 1)"
+
+.PHONY: write-manifest
+write-manifest: ## Regenerate the archive checksum manifest
+	@$(PY) -c "from pathlib import Path; from spxrnd.store import archive; \
+print(archive.write_manifest(Path('data/raw'), Path('manifests/raw_archive.sha256')), 'captures')"
+
+.PHONY: compress-archive
+compress-archive: ## Gzip any uncompressed captures (verify-then-replace)
+	@$(PY) -c "from pathlib import Path; from spxrnd.store import archive; \
+rs = archive.compress_archive(Path('data/raw')); \
+print(sum(not r.skipped for r in rs), 'compressed,', sum(r.skipped for r in rs), 'already done')"
 
 .PHONY: fixtures
 fixtures: ## Regenerate the test fixture corpus from data/raw
@@ -55,7 +69,11 @@ collect: ## Take exactly one snapshot into data/raw
 
 .PHONY: backfill
 backfill: ## Rebuild the curated layer from the immutable raw archive
-	$(PY) -m spxrnd.cli.main backfill --dir data
+	@$(PY) -c "from pathlib import Path; from spxrnd.store import catalog; \
+r = catalog.backfill(Path('data/raw'), Path('data/curated')); \
+print(f'{len(r.written)} captures, {r.total_rows:,} rows, {r.total_bytes/1e6:.1f} MB, {len(r.failed)} failed'); \
+d = catalog.divergence(Path('data/raw'), Path('data/curated')); \
+print('divergence:', 'aligned' if d.aligned else d)"
 
 .PHONY: clean
 clean: ## Remove build and test caches (never touches data/)

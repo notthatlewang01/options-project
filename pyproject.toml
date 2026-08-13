@@ -20,6 +20,11 @@ analysis = [
     "pandas>=2.1",
     "pyarrow>=14",
     "duckdb>=0.10",
+    # DuckDB needs pytz to materialise a TIMESTAMP WITH TIME ZONE into a Python
+    # datetime. Without it every fetchall() touching capture_utc raises. The
+    # alternative was storing naive UTC and dropping the zone, which trades a
+    # 500 KB dependency for a schema that no longer says what it means.
+    "pytz>=2024.1",
 ]
 dev = [
     "pytest>=7.4",

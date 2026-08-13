@@ -25,6 +25,7 @@ chain, so these cover the whole pathological timeline at ~1 KB each.
 | `headers/_SPX_2026-08-11T20-57-15Z.json` | freeze: same print, seqno ADVANCED (defeats seqno dedup) |
 | `headers/_SPX_2026-08-11T21-07-17Z.json` | freeze: same print, hours of staleness |
 | `headers/_SPX_2026-08-11T23-57-57Z.json` | freeze: 7h45m stale; also the raw-without-curated case |
+| `headers/_SPX_2026-08-13T01-25-33Z.json` | Aug 12 settlement; prev_day_close has rolled forward |
 
 ## What the trimmed chain preserves
 
@@ -52,5 +53,6 @@ chain, so these cover the whole pathological timeline at ~1 KB each.
 | `headers/_SPX_2026-08-11T20-57-15Z.json` | 614 |
 | `headers/_SPX_2026-08-11T21-07-17Z.json` | 607 |
 | `headers/_SPX_2026-08-11T23-57-57Z.json` | 607 |
+| `headers/_SPX_2026-08-13T01-25-33Z.json` | 594 |
 | `chain_trimmed.json` | 370,857 |
 | `chain_full_close.json.gz` | 1,696,760 |

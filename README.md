@@ -19,7 +19,7 @@ Under construction, built in gated stages. See
 | 0 | Relocation, repo skeleton | done |
 | 1 | Fixture corpus, seed regression tests | done |
 | 2 | `ingest` — fetch, validate, gate, write | done |
-| 3 | `store` — archive, Parquet, DuckDB catalog | — |
+| 3 | `store` — archive, Parquet, DuckDB catalog | done |
 | 4 | `curate` — quality filters, forward curve | — |
 | 5 | `analytics` — Black-76, IV, arbitrage checks | — |
 | 6 | RND — smile fit, Breeden–Litzenberger, BKM | — |
@@ -72,14 +72,21 @@ reproducible by `make backfill`. Never edit `data/raw/`.
 
 ### What is currently collected
 
-- 30 raw captures, 25 with distinct index prints, 5 post-close duplicates.
-- One usable session: **Aug 11 2026, 23 captures, 16:11Z–20:37Z** (12:11–16:37
-  ET) at ~10-minute cadence, index 7741 → 7728. Gaps at 16:32→16:50 and
-  17:10→17:56.
-- Two off-hours strays; the Aug 9 capture is a *weekend* fetch serving Aug 7's
-  close.
-- The close snapshot holds **30,692 options** across 55 expiries (same-day out
-  to Dec 2031), split SPX 10,156 / SPXW 20,536.
+| | |
+|---|---|
+| Captures | 31 |
+| Raw archive | **55 MB** gzipped (was 392 MB, 7.1× reduction) |
+| Curated | 55.9 MB Parquet, **952,564 rows** |
+| Unparseable symbols | 0 |
+
+- One full session: **Aug 11 2026, 23 captures, 16:11Z–20:37Z** (12:11–16:37 ET)
+  at ~10-minute cadence, index 7741 → 7728. Gaps at 16:32→16:50 and 17:10→17:56.
+- Two settlement snapshots: **Aug 11** (spot 7728.20, 30,692 contracts) and
+  **Aug 12** (spot 7748.50, 30,600).
+- Five post-close repeats and two off-hours strays, all retained — the Aug 9
+  capture is a *weekend* fetch serving Aug 7's close.
+- The Aug 11 close holds **30,692 options** across 55 expiries (same-day out to
+  Dec 2031), split SPX 10,156 / SPXW 20,536.
 
 ### Why the original CSVs were retired
 

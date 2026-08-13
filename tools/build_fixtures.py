@@ -63,11 +63,26 @@ HEADER_CAPTURES = {
     "2026-08-11T20-57-15Z": "freeze: same print, seqno ADVANCED (defeats seqno dedup)",
     "2026-08-11T21-07-17Z": "freeze: same print, hours of staleness",
     "2026-08-11T23-57-57Z": "freeze: 7h45m stale; also the raw-without-curated case",
+    "2026-08-13T01-25-33Z": "Aug 12 settlement; prev_day_close has rolled forward",
 }
 
 
-def capture_file(name: str) -> str:
-    """Bare capture timestamp -> the archive filename it came from."""
+def source_path(name: str) -> Path:
+    """Bare capture timestamp -> the archive file it came from.
+
+    The archive holds both `.json` and `.json.gz` -- captures taken before the
+    Stage 3 compression are uncompressed. Callers should not have to care.
+    """
+    plain = RAW / f"{TICKER}_{name}.json"
+    return plain if plain.exists() else RAW / f"{TICKER}_{name}.json.gz"
+
+
+def fixture_name(name: str) -> str:
+    """Fixture filenames are always plain `.json`, whatever the source was.
+
+    Header fixtures are ~600 bytes; compressing them would trade readable diffs
+    for nothing, and a `.gz` suffix on uncompressed bytes is a trap.
+    """
     return f"{TICKER}_{name}.json"
 
 
@@ -160,7 +175,8 @@ def select_options(
         take(o, "zero bid")
 
     # --- last_trade_price can be years stale (one contract last printed in
-    # Aug 2024, 65% away from its current bid). It is not a quote.
+    # Aug 2024, 39.7% away from its current mid). It is not a quote -- and one
+    # quoted contract in six sits over 25% from its own mid, ancient or not.
     for o in sorted(
         (o for o in options if (t := o.get("last_trade_time")) and t < "2026-01"),
         key=lambda o: (o.get("last_trade_time") or "", o["option"]),
@@ -209,7 +225,7 @@ def build(check: bool = False) -> int:
 
     # --- metadata-only headers -------------------------------------------
     for name in sorted(HEADER_CAPTURES):
-        src = RAW / capture_file(name)
+        src = source_path(name)
         if not src.exists():
             print(f"ERROR: missing capture {src.name}", file=sys.stderr)
             return 1
@@ -217,11 +233,11 @@ def build(check: bool = False) -> int:
         payload["data"]["options"] = []
         blob = json.dumps(payload, indent=1, sort_keys=True) + "\n"
         if not check:
-            (FIXTURES / "headers" / capture_file(name)).write_text(blob)
-        written.append((f"headers/{capture_file(name)}", len(blob)))
+            (FIXTURES / "headers" / fixture_name(name)).write_text(blob)
+        written.append((f"headers/{fixture_name(name)}", len(blob)))
 
     # --- trimmed chain ----------------------------------------------------
-    payload = load(RAW / capture_file(CLOSE_CAPTURE))
+    payload = load(source_path(CLOSE_CAPTURE))
     spot = payload["data"]["current_price"]
     total = len(payload["data"]["options"])
     selected, reasons = select_options(payload["data"]["options"], spot)
@@ -232,7 +248,7 @@ def build(check: bool = False) -> int:
     written.append(("chain_trimmed.json", len(blob)))
 
     # --- full chain, gzipped ---------------------------------------------
-    full = load(RAW / capture_file(CLOSE_CAPTURE))
+    full = load(source_path(CLOSE_CAPTURE))
     raw_blob = json.dumps(full, separators=(",", ":")).encode()
     gz = gzip.compress(raw_blob, compresslevel=9, mtime=0)  # mtime=0 -> reproducible
     if not check:
@@ -247,7 +263,7 @@ def build(check: bool = False) -> int:
         "regenerate instead. Selection is deterministic, so regeneration is a no-op",
         "unless the archive or the selectors change.",
         "",
-        f"Source capture for all chain fixtures: `{capture_file(CLOSE_CAPTURE)}`  ",
+        f"Source capture for all chain fixtures: `{source_path(CLOSE_CAPTURE).name}`  ",
         f"Spot at capture: {spot}  ",
         f"Full chain: {total:,} options  ",
         f"Trimmed chain: {len(selected):,} options",
@@ -261,7 +277,7 @@ def build(check: bool = False) -> int:
         "|---|---|",
     ]
     lines += [
-        f"| `headers/{capture_file(n)}` | {why} |"
+        f"| `headers/{fixture_name(n)}` | {why} |"
         for n, why in sorted(HEADER_CAPTURES.items())
     ]
     lines += [

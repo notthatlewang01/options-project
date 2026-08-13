@@ -556,3 +556,54 @@ class TestStalenessThresholdBoundary:
     def test_threshold_is_derived_from_delay_plus_cadence(self):
         """Not a magic number: feed delay + one cadence + jitter headroom."""
         assert freshness.DEFAULT_MAX_STALE >= (freshness.FEED_DELAY + freshness.CADENCE)
+
+
+# ---------------------------------------------------------------------------
+# 12. prev_day_close rolls forward overnight
+# ---------------------------------------------------------------------------
+# It is not reliably "the previous day's close". Some hours after the session
+# ends the feed advances it to the CURRENT day's close, so on an evening
+# snapshot prev_day_close == current_price and any daily return computed from
+# it is exactly zero.
+#
+# Observed in the archive:
+#
+#     Aug 11 19:57 ET  (3h42m after close)  prev=7753.11  current=7728.20  ok
+#     Aug 12 21:25 ET  (5h10m after close)  prev=7748.50  current=7748.50  rolled
+#
+# So the rollover happens somewhere in the evening, and whether a given capture
+# has crossed it is not knowable from the payload alone. The only safe reading
+# is that prev_day_close is unusable for return calculations; the previous
+# close must come from the previous capture in our own archive.
+
+
+class TestSeed12PrevDayCloseRollsForward:
+    def test_an_evening_capture_shows_prev_equal_to_current(self):
+        raw = load_header("2026-08-13T01-25-33Z")["data"]
+        assert raw["prev_day_close"] == raw["current_price"] == 7748.5
+
+    def test_an_earlier_evening_capture_has_not_yet_rolled(self):
+        """The same session, four hours earlier, still reports Aug 10's close.
+
+        The pair is the whole point: identical field, same phase of the day,
+        opposite meanings.
+        """
+        raw = load_header("2026-08-11T23-57-57Z")["data"]
+        assert raw["prev_day_close"] == 7753.1099
+        assert raw["current_price"] == 7728.2002
+        assert raw["prev_day_close"] != raw["current_price"]
+
+    def test_intraday_captures_report_a_genuine_previous_close(self):
+        """During the session the field means what it says."""
+        raw = load_header("2026-08-11T16-11-33Z")["data"]
+        assert raw["prev_day_close"] == 7753.1099
+        assert raw["current_price"] == 7741.3999
+
+    def test_a_daily_return_from_prev_day_close_would_be_zero(self):
+        """State the damage as the calculation someone would actually write."""
+        raw = load_header("2026-08-13T01-25-33Z")["data"]
+        daily_return = raw["current_price"] / raw["prev_day_close"] - 1
+        assert daily_return == 0.0, (
+            "if this ever stops being 0, the feed changed and the rule that "
+            "prev_day_close is unusable for returns should be revisited"
+        )
