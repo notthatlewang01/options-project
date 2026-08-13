@@ -84,6 +84,10 @@ class Verdict(StrEnum):
     DUPLICATE_PRINT = "duplicate_print"
     STALE_FEED = "stale_feed"
     FORCED = "forced"
+    SKIPPED_LOCKED = "skipped_locked"
+    """Another collector held the lock. Not produced by :func:`evaluate` -- the
+    collector records it when it never got as far as fetching. Lives here so
+    every outcome the collector can report is enumerated in one place."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,4 +129,71 @@ def evaluate(
     Returns:
         A :class:`Decision`. Callers branch on ``.accepted`` and log ``.detail``.
     """
-    raise NotImplementedError
+    if now.tzinfo is None:
+        raise ValueError("`now` must be timezone-aware")
+
+    print_str = snapshot.index_last_trade.isoformat(timespec="seconds")
+    # The state file stores the feed's own naive string. Compare in that form so
+    # a state file written by an older version still matches.
+    print_naive = snapshot.index_last_trade.replace(tzinfo=None).isoformat(
+        timespec="seconds"
+    )
+    age = now - snapshot.index_last_trade
+
+    if force:
+        return Decision(
+            verdict=Verdict.FORCED,
+            detail=(
+                f"forced: index last printed {print_str} "
+                f"({age.total_seconds() / 60:.1f} min old), spot {snapshot.spot}"
+            ),
+            age=age,
+        )
+
+    # --- duplicate ------------------------------------------------------
+    # Checked first: when we have state, an unmoved print is a more precise
+    # diagnosis than "stale", and it is the case that actually recurs.
+    if (
+        previous.index_last_trade is not None
+        and previous.index_last_trade == print_naive
+    ):
+        return Decision(
+            verdict=Verdict.DUPLICATE_PRINT,
+            detail=(
+                f"no new data: index last print still {print_str}, spot "
+                f"{snapshot.spot} (seqno {snapshot.seqno}"
+                + (
+                    f", advanced from {previous.seqno} -- seqno moves without new "
+                    "prints and is not a dedup key"
+                    if previous.seqno is not None and previous.seqno != snapshot.seqno
+                    else ""
+                )
+                + ")"
+            ),
+            age=age,
+        )
+
+    # --- staleness ------------------------------------------------------
+    # The backstop. Catches holidays, weekends, and off-hours ticks with no
+    # exchange calendar, and covers the case where state was lost.
+    if age > max_stale:
+        return Decision(
+            verdict=Verdict.STALE_FEED,
+            detail=(
+                f"feed is stale: index last printed {print_str} ET, "
+                f"{age.total_seconds() / 60:.1f} min ago, over the "
+                f"{max_stale.total_seconds() / 60:.0f} min limit -- market closed "
+                "or holiday"
+            ),
+            age=age,
+        )
+
+    return Decision(
+        verdict=Verdict.ACCEPT,
+        detail=(
+            f"new data: index last printed {print_str} ET "
+            f"({age.total_seconds() / 60:.1f} min ago), spot {snapshot.spot}, "
+            f"{snapshot.n_options} options"
+        ),
+        age=age,
+    )

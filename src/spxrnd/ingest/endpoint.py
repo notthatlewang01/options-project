@@ -11,8 +11,14 @@ against real captured payloads with no network and no mocking framework.
 
 from __future__ import annotations
 
+import gzip
+import json
+import time
+import urllib.request
 from collections.abc import Callable
 from typing import Any
+
+from .errors import FetchError
 
 ENDPOINT = "https://cdn.cboe.com/api/global/delayed_quotes/options/{ticker}.json"
 
@@ -53,7 +59,31 @@ def fetch(
         FetchError: every attempt failed. Carries the last underlying error --
             a dead network and a 500 need different responses from an operator.
     """
-    raise NotImplementedError
+    if retries < 1:
+        raise ValueError(f"retries must be at least 1, got {retries}")
+
+    transport = fetcher or _urllib_fetcher
+    pause = sleep or time.sleep
+    url = ENDPOINT.format(ticker=ticker)
+
+    last_error: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            body = transport(url, timeout)
+            return json.loads(body.decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001 -- see below
+            # Deliberately broad. Transports raise from urllib, ssl, socket,
+            # zlib and json; enumerating them means a new failure mode escapes
+            # the retry loop and kills the capture outright. Whatever it was is
+            # attached to the FetchError for the operator.
+            last_error = exc
+            if attempt < retries:
+                pause(2**attempt)
+
+    raise FetchError(
+        f"all {retries} attempts failed for {url}: "
+        f"{type(last_error).__name__}: {last_error}"
+    ) from last_error
 
 
 def _urllib_fetcher(url: str, timeout: float) -> bytes:
@@ -62,4 +92,13 @@ def _urllib_fetcher(url: str, timeout: float) -> bytes:
     Kept private and separate from :func:`fetch` so the retry policy can be
     tested independently of sockets.
     """
-    raise NotImplementedError
+    request = urllib.request.Request(
+        url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"}
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        body = response.read()
+        # urllib does not transparently decompress; without this the payload is
+        # a gzip member and json.loads fails on byte one.
+        if response.headers.get("Content-Encoding") == "gzip":
+            body = gzip.decompress(body)
+        return body

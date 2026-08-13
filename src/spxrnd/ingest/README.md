@@ -3,9 +3,8 @@
 Fetch one option-chain payload from CBOE, decide whether it carries new
 information, and write it to the immutable archive. Nothing else.
 
-**Status: API defined, implementation pending (Stage 2).** Every function below
-raises `NotImplementedError`; the contract is pinned by
-`tests/test_seed_regressions.py`.
+**Status: complete.** 319 tests, 100% statement coverage, plus a `--live` smoke
+test verified against the real endpoint.
 
 ## Why this component is stdlib-only
 
@@ -111,6 +110,32 @@ Requests gzip (≈1.7 MB instead of ≈13 MB) and backs off exponentially. This 
 free courtesy endpoint. `fetcher` and `sleep` are injectable so retry behaviour
 is testable without sockets or waiting.
 
+### `health` — is collection actually working?
+
+```python
+read_health(path) -> Health
+record(path, *, now, verdict, written=False, error=None) -> Health
+```
+
+A scheduled collector fails silently by default: the job stops, the log scrolls,
+and you find out weeks later when an analysis has a hole in it — by which point
+the captures are permanently gone. `data/health.json` is the standing answer,
+and nothing in this module can raise: telemetry is worth strictly less than the
+data it reports on.
+
+Three separate clocks, because they fail differently and only one of them means
+something is broken:
+
+| Field | Meaning | If it's old… |
+|---|---|---|
+| `last_attempt` | the collector process ran | **the scheduler** is broken |
+| `last_ok` | fetch and parse both succeeded | **the network or feed** is broken |
+| `last_write` | a capture reached the archive | nothing — this is old every weekend |
+
+**A skip is not a failure.** Weekends, holidays and off-hours ticks all end in
+one, and `consecutive_failures` is cleared by any successful fetch — including a
+skipped one, since a skip still proves the pipeline works end to end.
+
 ### `collector` — orchestration
 
 ```python
@@ -152,6 +177,16 @@ if result.written:
     print("archived to", result.raw_path)
 ```
 
+Run against the live feed outside market hours, this prints:
+
+```
+stale_feed - feed is stale: index last printed 2026-08-12T16:14:59-04:00 ET,
+310.5 min ago, over the 27 min limit -- market closed or holiday
+```
+
+…and writes nothing but a health record. That is the intended outcome, not a
+failure.
+
 Replaying a captured payload through the full pipeline, no network:
 
 ```python
@@ -161,6 +196,15 @@ result = collect_once(
     Path("/tmp/scratch"), payload=json.load(open(capture)), force=True
 )
 ```
+
+## Files written under `data/`
+
+| Path | Written when | Notes |
+|---|---|---|
+| `raw/<ticker>_<UTC>.json.gz` | a capture is accepted | Immutable. ~1.8 MB, ~7× smaller than the JSON. |
+| `state.json` | **after** the archive write succeeds | The ordering decides what a crash costs. |
+| `health.json` | every invocation that acquires the lock | Never blocks a capture. |
+| `.collect.lock` | for the duration of a run | Removed on exit, including on exception. |
 
 ## The staleness boundary, measured
 

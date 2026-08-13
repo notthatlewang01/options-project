@@ -11,10 +11,12 @@ that cannot be re-fetched.
 
 from __future__ import annotations
 
+import json
 import os
+import time
 from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass
+from contextlib import contextmanager, suppress
+from dataclasses import asdict, dataclass
 from datetime import timedelta
 from pathlib import Path
 
@@ -57,12 +59,32 @@ def read_state(path: Path) -> CollectorState:
     duplicate row, while the cost of refusing to run is a permanent gap in a
     series that cannot be backfilled.
     """
-    raise NotImplementedError
+    try:
+        raw = json.loads(path.read_text())
+    except (FileNotFoundError, NotADirectoryError, json.JSONDecodeError, OSError):
+        return CollectorState()
+    if not isinstance(raw, dict):
+        return CollectorState()
+
+    # Field-by-field rather than CollectorState(**raw): a state file written by
+    # a future version with extra keys must not crash an older collector.
+    def _str(key: str) -> str | None:
+        value = raw.get(key)
+        return value if isinstance(value, str) else None
+
+    seqno = raw.get("seqno")
+    spot = raw.get("spot")
+    return CollectorState(
+        index_last_trade=_str("index_last_trade"),
+        seqno=seqno if isinstance(seqno, int) else None,
+        capture_utc=_str("capture_utc"),
+        spot=float(spot) if isinstance(spot, (int, float)) else None,
+    )
 
 
 def write_state(path: Path, state: CollectorState) -> None:
     """Persist collector state atomically."""
-    raise NotImplementedError
+    write_atomic(path, json.dumps(asdict(state), indent=1, sort_keys=True).encode())
 
 
 def write_atomic(path: Path, data: bytes) -> None:
@@ -73,7 +95,22 @@ def write_atomic(path: Path, data: bytes) -> None:
     file or the new one -- never a truncated body that a later run would parse as
     a valid but wrong capture.
     """
-    raise NotImplementedError
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Unique per process so two collectors racing cannot corrupt each other's
+    # temp file. The lock makes that unlikely, not impossible -- separate data
+    # directories share no lock.
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            # Without fsync the rename can land before the bytes do, and a
+            # power loss leaves a correctly-named empty file.
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 @contextmanager
@@ -92,7 +129,55 @@ def collector_lock(
 
     The lock is always released on the way out, including on exception.
     """
-    raise NotImplementedError
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = _acquire(path, stale_after)
+    if fd is None:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        # Close before unlinking, and tolerate a lock file that has already
+        # gone: a reclaim by another process is not our failure to report.
+        with suppress(OSError):
+            os.close(fd)
+        path.unlink(missing_ok=True)
+
+
+def _acquire(path: Path, stale_after: timedelta) -> int | None:
+    """Create the lock file exclusively, reclaiming it if abandoned."""
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        pass
+    else:
+        os.write(fd, _pid_payload())
+        return fd
+
+    # Someone holds it. Abandoned, or genuinely running?
+    try:
+        age = time.time() - path.stat().st_mtime
+    except FileNotFoundError:
+        # Released between our open and our stat. One retry, then give up --
+        # looping here would spin against a busy collector.
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            return None
+        os.write(fd, _pid_payload())
+        return fd
+
+    if age <= stale_after.total_seconds():
+        return None
+
+    path.unlink(missing_ok=True)
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        # Another collector reclaimed it first. Theirs.
+        return None
+    os.write(fd, _pid_payload())
+    return fd
 
 
 def _pid_payload() -> bytes:

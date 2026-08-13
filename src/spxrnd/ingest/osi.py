@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass
 from datetime import date
 
+from .errors import OsiParseError
+
 # Anchored, and the root is [A-Z]+ rather than a non-greedy `.+?`. Non-greedy
 # matching would happily accept junk before the date and split it in surprising
 # places; this rejects it outright.
@@ -68,7 +70,28 @@ def parse(symbol: str) -> OptionSymbol:
         OsiParseError: the symbol does not match the OSI layout, or encodes a
             date that does not exist (e.g. month 13).
     """
-    raise NotImplementedError
+    cleaned = symbol.replace(" ", "")
+    m = OSI_RE.match(cleaned)
+    if m is None:
+        raise OsiParseError(f"not an OSI symbol: {symbol!r}")
+
+    yy, mm, dd = m["exp"][0:2], m["exp"][2:4], m["exp"][4:6]
+    try:
+        # OSI encodes a two-digit year. The scheme dates from 2010 and the
+        # archive spans 2026-2031, so 20YY is unambiguous here. A feed that
+        # ever emits a 19xx expiry is a feed we should not be parsing silently.
+        expiry = date(2000 + int(yy), int(mm), int(dd))
+    except ValueError as exc:
+        raise OsiParseError(f"impossible expiry in {symbol!r}: {exc}") from exc
+
+    return OptionSymbol(
+        root=m["root"],
+        expiry=expiry,
+        right=CALL if m["right"] == "C" else PUT,
+        # The strike field is the strike times 1000, zero-padded to 8 digits.
+        strike=int(m["strike"]) / 1000.0,
+        raw=cleaned,
+    )
 
 
 def try_parse(symbol: str) -> OptionSymbol | None:
@@ -78,4 +101,7 @@ def try_parse(symbol: str) -> OptionSymbol | None:
     count them rather than abort. The caller is responsible for logging the
     count -- silently dropping contracts is how a chain quietly loses an expiry.
     """
-    raise NotImplementedError
+    try:
+        return parse(symbol)
+    except OsiParseError:
+        return None

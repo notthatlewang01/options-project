@@ -13,11 +13,16 @@ persisted, which would leave a permanent hole.
 
 from __future__ import annotations
 
+import gzip
+import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .freshness import DEFAULT_MAX_STALE, Decision
+from . import endpoint, freshness, health, state
+from . import payload as payload_mod
+from .errors import IngestError
+from .freshness import DEFAULT_MAX_STALE, Decision, Verdict
 from .payload import Snapshot
 
 DEFAULT_TICKER = "_SPX"
@@ -73,7 +78,81 @@ def collect_once(
         FetchError: the endpoint could not be reached.
         PayloadError: the response was not a usable chain payload.
     """
-    raise NotImplementedError
+    data_dir = Path(data_dir).expanduser().resolve()
+    captured_at = now or datetime.now(UTC)
+    health_path = data_dir / health.HEALTH_FILENAME
+    state_path = data_dir / "state.json"
+
+    with state.collector_lock(data_dir / ".collect.lock") as acquired:
+        if not acquired:
+            # Not an error: the scheduler overlapping two runs is expected, and
+            # this is not the run that should record an outcome for the tick.
+            return CaptureResult(
+                decision=Decision(
+                    verdict=Verdict.SKIPPED_LOCKED,
+                    detail="another collector holds the lock; exiting",
+                )
+            )
+
+        try:
+            body = payload_mod.parse(
+                payload
+                if payload is not None
+                else endpoint.fetch(ticker, retries=retries),
+                ticker=ticker,
+            )
+        except IngestError as exc:
+            health.record(
+                health_path,
+                now=captured_at,
+                verdict=type(exc).__name__,
+                error=str(exc),
+            )
+            raise
+
+        decision = freshness.evaluate(
+            body,
+            state.read_state(state_path),
+            now=captured_at,
+            max_stale=max_stale,
+            force=force,
+        )
+
+        if not decision.accepted:
+            health.record(
+                health_path, now=captured_at, verdict=decision.verdict, written=False
+            )
+            return CaptureResult(decision=decision, snapshot=body)
+
+        raw_path = archive_path(data_dir, ticker, captured_at)
+        state.write_atomic(
+            raw_path,
+            gzip.compress(
+                json.dumps(body.raw, separators=(",", ":")).encode(),
+                compresslevel=6,
+                mtime=0,
+            ),
+        )
+
+        # Only now. A crash between the write above and the write below
+        # re-captures a snapshot we already hold -- harmless, the gate drops it.
+        # The reverse order would advance past a capture that was never
+        # persisted, leaving a hole nothing can fill.
+        state.write_state(
+            state_path,
+            state.CollectorState(
+                index_last_trade=body.index_last_trade.replace(tzinfo=None).isoformat(
+                    timespec="seconds"
+                ),
+                seqno=body.seqno,
+                capture_utc=_stamp(captured_at),
+                spot=body.spot,
+            ),
+        )
+        health.record(
+            health_path, now=captured_at, verdict=decision.verdict, written=True
+        )
+        return CaptureResult(decision=decision, snapshot=body, raw_path=raw_path)
 
 
 def archive_path(data_dir: Path, ticker: str, captured_at: datetime) -> Path:
@@ -86,4 +165,15 @@ def archive_path(data_dir: Path, ticker: str, captured_at: datetime) -> Path:
     this convention uncompressed; the archive writer in `store` is what
     reconciles the two.
     """
-    raise NotImplementedError
+    return Path(data_dir) / "raw" / f"{ticker}_{_stamp(captured_at)}.json.gz"
+
+
+def _stamp(when: datetime) -> str:
+    """UTC capture timestamp in filename form: ``2026-08-11T20-37-03Z``.
+
+    Colons are illegal on some filesystems and awkward on all of them, so the
+    time separators are hyphens. Always normalised to UTC first -- a filename
+    whose meaning depends on the machine's timezone is a filename that sorts
+    wrong the moment you move the collector.
+    """
+    return when.astimezone(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")

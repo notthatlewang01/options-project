@@ -33,6 +33,8 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .errors import PayloadError
+
 EASTERN = ZoneInfo("America/New_York")
 
 
@@ -88,7 +90,45 @@ def parse(payload: dict[str, Any], *, ticker: str) -> Snapshot:
             a parseable timestamp. Never defaults -- a snapshot that cannot be
             freshness-gated must not reach the archive.
     """
-    raise NotImplementedError
+    if not isinstance(payload, dict):
+        raise PayloadError(f"payload is not an object: {type(payload).__name__}")
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise PayloadError("payload has no 'data' object")
+
+    # The whole reason this module exists. The feed timestamp is at the TOP
+    # level; data["timestamp"] does not exist. Reading the wrong one is silent
+    # -- .get() returns "" and every downstream row carries a blank column.
+    feed_timestamp = payload.get("timestamp")
+    if not feed_timestamp:
+        raise PayloadError("payload has no top-level 'timestamp'")
+
+    # Required, and never defaulted: without it the freshness gate cannot run,
+    # and a snapshot that cannot be gated must not reach a permanent archive.
+    index_last_trade = parse_eastern(data.get("last_trade_time", ""))
+
+    spot = data.get("current_price")
+    if not isinstance(spot, (int, float)) or spot <= 0:
+        raise PayloadError(f"unusable current_price: {spot!r}")
+
+    seqno = data.get("seqno")
+    if not isinstance(seqno, int):
+        raise PayloadError(f"unusable seqno: {seqno!r}")
+
+    options = data.get("options")
+    if not isinstance(options, list):
+        raise PayloadError("payload has no 'options' list")
+
+    return Snapshot(
+        feed_timestamp=str(feed_timestamp),
+        index_last_trade=index_last_trade,
+        seqno=seqno,
+        ticker=ticker,
+        spot=float(spot),
+        options=options,
+        raw=payload,
+    )
 
 
 def parse_eastern(timestamp: str) -> datetime:
@@ -102,4 +142,16 @@ def parse_eastern(timestamp: str) -> datetime:
     Raises:
         PayloadError: the string is empty or not an ISO-8601 timestamp.
     """
-    raise NotImplementedError
+    if not timestamp:
+        raise PayloadError("empty timestamp")
+    try:
+        naive = datetime.fromisoformat(timestamp)
+    except (TypeError, ValueError) as exc:
+        raise PayloadError(f"unparseable timestamp {timestamp!r}: {exc}") from exc
+    if naive.tzinfo is not None:
+        raise PayloadError(
+            f"expected a naive US/Eastern timestamp, got an aware one: {timestamp!r}"
+        )
+    # `replace` rather than `astimezone`: the value IS Eastern wall-clock time,
+    # it simply arrived without a zone. Converting would shift it by the offset.
+    return naive.replace(tzinfo=EASTERN)

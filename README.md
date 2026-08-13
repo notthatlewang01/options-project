@@ -17,8 +17,8 @@ Under construction, built in gated stages. See
 | Stage | Component | State |
 |---|---|---|
 | 0 | Relocation, repo skeleton | done |
-| 1 | Fixture corpus, seed regression tests | — |
-| 2 | `ingest` — fetch, validate, gate, write | — |
+| 1 | Fixture corpus, seed regression tests | done |
+| 2 | `ingest` — fetch, validate, gate, write | done |
 | 3 | `store` — archive, Parquet, DuckDB catalog | — |
 | 4 | `curate` — quality filters, forward curve | — |
 | 5 | `analytics` — Black-76, IV, arbitrage checks | — |

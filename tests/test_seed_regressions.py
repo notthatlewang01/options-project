@@ -337,10 +337,19 @@ class TestSeed07ZeroBidIsPreservedAndIdentifiable:
 # ---------------------------------------------------------------------------
 # 8. last_trade_price is not a quote
 # ---------------------------------------------------------------------------
-# One contract in the close snapshot last printed on 2024-08-09 -- two years
-# before the capture -- at 3588.02, against a current bid of 5930.80. Using the
-# last trade as a price would be 65% wrong on that contract alone. Most of this
-# chain has never traded today, or at all.
+# Two contracts in the close snapshot last printed in 2024 -- SPX271217C01800000
+# on 2024-08-09 at 3588.02, against a mid of 5949.90 today, 39.7% away.
+#
+# The individual cases are the vivid part; the population is the important part.
+# Of 22,716 quoted contracts that have ever traded, 3,751 -- one in six -- sit
+# more than 25% from their own live mid. This is not a handful of dead strikes,
+# it is the normal condition of an option chain, and any pipeline that reaches
+# for last_trade_price when bid/ask look inconvenient is wrong at that scale.
+
+
+def _mid_deviation(opt: dict) -> float:
+    mid = (opt["bid"] + opt["ask"]) / 2
+    return abs(opt["last_trade_price"] - mid) / mid
 
 
 class TestSeed08LastTradePriceIsNotAQuote:
@@ -353,19 +362,42 @@ class TestSeed08LastTradePriceIsNotAQuote:
         ]
         assert ancient, "fixture must retain contracts with years-stale prints"
 
-    def test_stale_last_trade_diverges_wildly_from_the_live_quote(self, trimmed_chain):
-        """Quantify the damage rather than asserting the principle."""
+    def test_years_stale_trades_diverge_materially_from_the_live_quote(
+        self, trimmed_chain
+    ):
+        """The specific case. Observed deviations are 38.5% and 39.7%."""
         snap = payload.parse(trimmed_chain, ticker="_SPX")
-        worst = 0.0
-        for o in snap.options:
-            if not o.get("last_trade_time") or o["last_trade_time"] >= "2025-01-01":
-                continue
-            if o["bid"] > 0 and o["last_trade_price"]:
-                mid = (o["bid"] + o["ask"]) / 2
-                worst = max(worst, abs(o["last_trade_price"] - mid) / mid)
-        assert worst > 0.5, (
-            "expected a stale last trade at least 50% away from the live mid; "
-            f"worst observed was {worst:.1%}"
+        deviations = [
+            _mid_deviation(o)
+            for o in snap.options
+            if o.get("last_trade_time")
+            and o["last_trade_time"] < "2025-01-01"
+            and o["bid"] > 0
+            and o["last_trade_price"]
+        ]
+        assert deviations, "fixture must retain a priceable years-stale contract"
+        assert max(deviations) > 0.25, (
+            "expected a years-stale last trade at least 25% from the live mid; "
+            f"worst observed was {max(deviations):.1%}"
+        )
+
+    def test_stale_last_trades_are_pervasive_not_exceptional(self, full_chain):
+        """The population claim, measured across the full 30,692-option chain.
+
+        This is the one that justifies the rule. If it were two dead contracts
+        you could special-case them; at one in six you cannot, and the only
+        correct policy is to never read last_trade_price as a price.
+        """
+        quoted = [
+            o
+            for o in full_chain["data"]["options"]
+            if o.get("last_trade_price") and o["bid"] > 0
+        ]
+        far = [o for o in quoted if _mid_deviation(o) > 0.25]
+        assert len(quoted) > 20_000, f"unexpected chain shape: {len(quoted)} quoted"
+        assert len(far) / len(quoted) > 0.10, (
+            "expected >10% of quoted contracts to sit over 25% from their own "
+            f"mid; observed {len(far)}/{len(quoted)} = {len(far) / len(quoted):.1%}"
         )
 
 
