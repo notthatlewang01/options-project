@@ -17,3 +17,6 @@ htmlcov/
 
 # macOS
 .DS_Store
+
+# Claude Code local settings (also covered by the user global ignore)
+.claude/settings.local.json
